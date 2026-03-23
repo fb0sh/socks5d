@@ -4,7 +4,6 @@ version = "0.2.0"
 edition = "2024"
 description = "A SOCKS5 proxy server written in Rust"
 keywords = ["socks5", "proxy", "server", "rust"]
-categories = ["networking", "networking-tools"]
 license = "MIT"
 repository = "https://github.com/fb0sh/socks5d"
 
