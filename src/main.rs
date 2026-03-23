@@ -1,3 +1,4 @@
+use clap::Parser;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream};
@@ -11,11 +12,21 @@ pub struct AuthCredit {
 
 #[tokio::main]
 async fn main() {
-    let listener = TcpListener::bind("0.0.0.0:1080").await.unwrap();
-    println!("SOCKS5 server running on 0.0.0.0:1080");
+    let args = Args::parse();
+    let bind = args.bind;
+    let username = args.username;
+    let password = args.password;
+
+    let need_auth = username.is_some() && password.is_some();
+
+    println!("[*] sever auth mode: {}", need_auth);
+
+    let listener = TcpListener::bind(&bind).await.unwrap();
+    println!("[*] SOCKS5 server running on {}", bind);
+
     let auth_credit = Arc::new(AuthCredit {
-        username: "admin".to_string(),
-        password: "123456".to_string(),
+        username: username.unwrap_or("".to_string()),
+        password: password.unwrap_or("".to_string()),
     });
 
     loop {
@@ -24,7 +35,7 @@ async fn main() {
                 println!("[+] client connected: {}", addr);
                 let auth = auth_credit.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_client(socket, &auth, false).await {
+                    if let Err(e) = handle_client(socket, &auth, need_auth).await {
                         println!("[-] error: {:?}", e);
                     }
                 });
@@ -107,7 +118,7 @@ async fn handle_auth(
             0xFF
         }
     }
-    println!("[客户端认证方法列表]: {:?}", methods);
+    println!("[Client Auth Method]: {:?}", methods);
 
     // 匹配方法 并 发送确认使用的协议
     let method = if need_auth {
@@ -128,13 +139,13 @@ async fn handle_auth(
         0xFF => {
             socket.write_all(&[SOCKS_VERSION, 0xFF]).await?;
             if need_auth {
-                return Err("请使用用户名/密码认证".into());
+                return Err("Pls use username/password".into());
             }
-            return Err("没有可用的认证方法".into());
+            return Err("No available auth method".into());
         }
         _ => {
             socket.write_all(&[SOCKS_VERSION, 0xFF]).await?;
-            return Err("不支持的认证方式".into());
+            return Err("Unsupported auth method".into());
         }
     }
 
@@ -155,13 +166,13 @@ async fn handle_auth(
         // 协议版本校验
         let ver = buf[0]; // 子协议版本
         if ver != 0x01 {
-            return Err(format!("不支持的子协议版本:{}", ver).into());
+            return Err(format!("Unsupported sub-protocol version :{}", ver).into());
         }
 
         // 获取 凭证
         let ulen = buf[1] as usize;
         if ulen == 0 {
-            return Err("用户名长度为0".into());
+            return Err("Username length is 0".into());
         }
         let mut uname_buf = vec![0u8; ulen];
         socket.read_exact(&mut uname_buf).await?;
@@ -171,14 +182,14 @@ async fn handle_auth(
 
         let plen = plen_buf[0] as usize;
         if plen == 0 {
-            return Err("密码长度为0".into());
+            return Err("Password length is 0".into());
         }
         let mut passwd_buf = vec![0u8; plen];
         socket.read_exact(&mut passwd_buf).await?;
 
         let uname = String::from_utf8(uname_buf)?;
         let passwd = String::from_utf8(passwd_buf)?;
-        println!("[客户端认证]: username: {}", &uname);
+        println!("[Client Auth]: username: {}", &uname);
 
         // +----+--------+
         // |VER | STATUS |
@@ -226,7 +237,7 @@ async fn handle_requests_addressing(socket: &mut TcpStream) -> Result<(String, u
     }
 
     if rsv != 0x00 {
-        return Err("服务器不支持非0x00的 RSV 值".into());
+        return Err("Server does not suppport none 0x00 RSV".into());
     }
 
     let dst_addr = match atyp {
@@ -250,7 +261,7 @@ async fn handle_requests_addressing(socket: &mut TcpStream) -> Result<(String, u
             socket.read_exact(&mut ip).await?;
             std::net::Ipv6Addr::from(ip).to_string()
         }
-        _ => return Err("不支持的 ATYP 类型".into()),
+        _ => return Err("Unsupported ATYP type".into()),
     };
 
     let mut port_buf = [0u8; 2];
@@ -304,7 +315,7 @@ async fn handle_replies(
                     let _ = socket
                         .write_all(&[SOCKS_VERSION, rep, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
                         .await;
-                    return Err(format!("连接失败: {:?}", e).into());
+                    return Err(format!("[reply] connection error: {:?}", e).into());
                 }
             };
 
@@ -336,14 +347,31 @@ async fn handle_replies(
             // 数据转发
             let (c2s, s2c) = copy_bidirectional(socket, &mut remote).await?;
             println!(
-                "client->server: {} bytes, server->client: {} bytes",
+                "[*] client->server: {} bytes, server->client: {} bytes",
                 c2s, s2c
             );
-            println!("[*] 连接关闭");
+            println!("[reply] connection closed");
         }
         _ => {
-            return Err("目前服务器只支持 CONNECT".into());
+            return Err("Sever only supports CONNECT".into());
         }
     }
     Ok(())
+}
+
+#[derive(Parser, Debug)]
+#[command(name = "socks5d")]
+#[command(about = "A rust SOCKS5 proxy server <fb0sh@outlook.com> github.com/fb0sh")]
+struct Args {
+    /// listen address
+    #[arg(short, long, default_value = "0.0.0.0:1080")]
+    bind: String,
+
+    /// username for auth
+    #[arg(short, long)]
+    username: Option<String>,
+
+    /// password for auth
+    #[arg(short, long)]
+    password: Option<String>,
 }

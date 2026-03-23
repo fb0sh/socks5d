@@ -1,7 +1,21 @@
 [package]
 name = "socks5d"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
-tokio = {version="1", features=["full"]}
+tokio = { version = "1", default-features = false, features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "io-util"
+] }
+
+clap = { version="4", features=["derive", "std"] }
+
+[profile.release]
+opt-level = "z"        # 最小体积
+lto = true             # 链接优化
+codegen-units = 1      # 单编译单元
+panic = "abort"        # 去 unwind runtime
+strip = true           # 去符号表（Rust 1.70+）
