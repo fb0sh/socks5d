@@ -15,6 +15,9 @@
 
 ```bash
 cargo build --release
+
+// install from crates-io
+cargo install socks5d
 ```
 
 ## 运行
