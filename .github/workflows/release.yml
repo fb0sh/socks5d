@@ -1,0 +1,96 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          # Linux (static musl)
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            name: linux-x86_64
+
+          - os: ubuntu-latest
+            target: i686-unknown-linux-musl
+            name: linux-x86
+
+          # Windows
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: windows-x86_64
+
+          - os: windows-latest
+            target: i686-pc-windows-msvc
+            name: windows-x86
+
+          # macOS (Intel)
+          - os: macos-13
+            target: x86_64-apple-darwin
+            name: macos-x86_64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Linux musl 静态编译依赖
+      - name: Install musl tools (Linux only)
+        if: contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      # Windows 32-bit 需要额外工具链支持
+      - name: Add i686 target (Windows)
+        if: contains(matrix.target, 'i686')
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir dist
+          BIN_NAME="socks5d"
+
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            cp target/${{ matrix.target }}/release/${BIN_NAME}.exe dist/${BIN_NAME}-${{ matrix.name }}.exe
+          else
+            cp target/${{ matrix.target }}/release/${BIN_NAME} dist/${BIN_NAME}-${{ matrix.name }}
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*
