@@ -31,11 +31,6 @@ jobs:
             target: i686-pc-windows-msvc
             name: windows-x86
 
-          # macOS (Intel)
-          - os: macos-13
-            target: x86_64-apple-darwin
-            name: macos-x86_64
-
     runs-on: ${{ matrix.os }}
 
     steps:
