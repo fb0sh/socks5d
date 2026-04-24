@@ -1,6 +1,6 @@
 [package]
 name = "socks5d"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 description = "A SOCKS5 proxy server written in Rust"
 keywords = ["socks5", "proxy", "server", "rust"]
@@ -18,6 +18,9 @@ tokio = { version = "1", default-features = false, features = [
 ] }
 
 clap = { version="4", features=["derive", "std"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+tracing-appender = "0.2"
 
 [profile.release]
 opt-level = "z"        # 最小体积

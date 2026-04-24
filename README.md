@@ -14,6 +14,8 @@
 - 连接超时控制
 - 空闲超时控制
 - 活动连接数监控
+- Structured logging（tracing + 文件日志轮转）
+- 每日日志轮转
 
 ## 编译
 
@@ -56,7 +58,8 @@ cargo install socks5d
   --password 123456 \
   --max-connections 1024 \
   --connect-timeout 10 \
-  --idle-timeout 300
+  --idle-timeout 300 \
+  --log-dir logs
 ```
 
 ### 参数说明
@@ -69,6 +72,11 @@ cargo install socks5d
 | `--max-connections` | `1024` | 最大并发连接数 |
 | `--connect-timeout` | `10` | 连接目标服务器超时（秒） |
 | `--idle-timeout` | `300` | 空闲超时（秒），0=无限制 |
+| `--log-dir` | `logs` | 日志目录 |
+
+### 日志
+
+日志输出到 stdout 和 `logs/socks5d.log.{日期}`，格式为 JSON。
 
 ## 认证机制
 
