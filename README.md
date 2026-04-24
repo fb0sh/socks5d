@@ -10,6 +10,10 @@
 - 用户名密码认证（RFC1929）
 - 异步高并发（Tokio）
 - 双向流量转发
+- 连接数限制（Semaphore）
+- 连接超时控制
+- 空闲超时控制
+- 活动连接数监控
 
 ## 编译
 
@@ -43,6 +47,29 @@ cargo install socks5d
 ./target/release/socks5d --bind 0.0.0.0:1080 --username admin --password 123456
 ```
 
+### 完整参数示例
+
+```bash
+./target/release/socks5d \
+  --bind 0.0.0.0:1080 \
+  --username admin \
+  --password 123456 \
+  --max-connections 1024 \
+  --connect-timeout 10 \
+  --idle-timeout 300
+```
+
+### 参数说明
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--bind` | `0.0.0.0:1080` | 监听地址 |
+| `--username` | - | 认证用户名 |
+| `--password` | - | 认证密码 |
+| `--max-connections` | `1024` | 最大并发连接数 |
+| `--connect-timeout` | `10` | 连接目标服务器超时（秒） |
+| `--idle-timeout` | `300` | 空闲超时（秒），0=无限制 |
+
 ## 认证机制
 
 ### 无认证
@@ -55,8 +82,8 @@ METHODS: [0x00]
 
 VER | ULEN | UNAME | PLEN | PASSWD
 
-成功: 0x01 0x00  
-失败: 0x01 0x01  
+成功: 0x01 0x00
+失败: 0x01 0x01
 
 ## SOCKS5 请求格式
 
@@ -78,13 +105,13 @@ VER | REP | RSV | ATYP | BND.ADDR | BND.PORT
 
 ## 错误码
 
-0x01 general failure  
-0x02 not allowed  
-0x03 network unreachable  
-0x04 host unreachable  
-0x05 connection refused  
-0x07 command not supported  
-0x08 address type not supported  
+0x01 general failure
+0x02 not allowed
+0x03 network unreachable
+0x04 host unreachable
+0x05 connection refused
+0x07 command not supported
+0x08 address type not supported
 
 ## 测试
 
@@ -95,5 +122,5 @@ curl --socks5-user admin:123456 --socks5 127.0.0.1:1080 http://example.com
 
 ## 注意
 
-仅支持 TCP CONNECT  
+仅支持 TCP CONNECT
 未加密，仅用于学习/测试/内网代理

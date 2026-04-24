@@ -1,7 +1,11 @@
 use clap::Parser;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Semaphore;
+use tokio::time::timeout;
 
 pub type DynError = Box<dyn std::error::Error>;
 pub const SOCKS_VERSION: u8 = 0x05;
@@ -13,31 +17,56 @@ pub struct AuthCredit {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
-    let bind = args.bind;
-    let username = args.username;
-    let password = args.password;
+    let bind = args.bind.clone();
+    let username = args.username.clone();
+    let password = args.password.clone();
+    let max_connections = args.max_connections;
+    let connect_timeout_secs = args.connect_timeout;
+    let idle_timeout_secs = args.idle_timeout;
 
     let need_auth = username.is_some() && password.is_some();
 
-    println!("[*] sever auth mode: {}", need_auth);
+    println!("[*] server auth mode: {}", need_auth);
 
     let listener = TcpListener::bind(&bind).await.unwrap();
     println!("[*] SOCKS5 server running on {}", bind);
 
     let auth_credit = Arc::new(AuthCredit {
-        username: username.unwrap_or("".to_string()),
-        password: password.unwrap_or("".to_string()),
+        username: username.unwrap_or_default(),
+        password: password.unwrap_or_default(),
     });
+
+    let semaphore = Arc::new(Semaphore::new(max_connections));
+    let active_connections = Arc::new(AtomicUsize::new(0));
 
     loop {
         match listener.accept().await {
             Ok((socket, addr)) => {
-                println!("[+] client connected: {}", addr);
+                let current = active_connections.fetch_add(1, Ordering::Relaxed) + 1;
+                println!("[+] client connected: {} (active: {})", addr, current);
+
                 let auth = auth_credit.clone();
+                let sem = semaphore.clone();
+                let connect_timeout = connect_timeout_secs;
+                let idle_timeout = idle_timeout_secs;
+                let active_conn = active_connections.clone();
+
                 tokio::spawn(async move {
-                    if let Err(e) = handle_client(socket, &auth, need_auth).await {
+                    let _permit = match sem.acquire().await {
+                        Ok(p) => p,
+                        Err(_) => {
+                            println!("[-] failed to acquire semaphore");
+                            active_conn.fetch_sub(1, Ordering::Relaxed);
+                            return;
+                        }
+                    };
+
+                    if let Err(e) = handle_client(socket, &auth, need_auth, connect_timeout, idle_timeout).await {
                         println!("[-] error: {:?}", e);
                     }
+
+                    let current = active_conn.fetch_sub(1, Ordering::Relaxed) - 1;
+                    println!("[-] client disconnected (active: {})", current);
                 });
             }
             Err(e) => {
@@ -51,6 +80,8 @@ async fn handle_client(
     mut socket: TcpStream,
     auth_credit: &AuthCredit,
     need_auth: bool,
+    connect_timeout: u64,
+    idle_timeout: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // 1. 协商 认证 处理认证
     handle_auth(&mut socket, auth_credit, need_auth).await?;
@@ -61,7 +92,7 @@ async fn handle_client(
     println!("[+] connect to {}:{}", &dst_addr, dst_port);
 
     // 3. 处理 响应，转发
-    handle_replies(&mut socket, &dst_addr, dst_port, cmd).await?;
+    handle_replies(&mut socket, &dst_addr, dst_port, cmd, connect_timeout, idle_timeout).await?;
 
     Ok(())
 }
@@ -276,6 +307,8 @@ async fn handle_replies(
     dst_addr: &str,
     dst_port: u16,
     cmd: u8,
+    connect_timeout: u64,
+    idle_timeout: u64,
 ) -> Result<(), DynError> {
     // RFC 1928
     // 根据 CMD 做出回复
@@ -300,12 +333,16 @@ async fn handle_replies(
     // o  ATYP   address type of following address
     match cmd {
         0x01 => {
-            // CONNECT
-            let mut remote = match TcpStream::connect((dst_addr, dst_port)).await {
-                Ok(s) => s,
-                Err(e) => {
-                    // 返回失败
-                    // 0.0.0.0 0
+            // CONNECT with timeout
+            let connect_result = timeout(
+                Duration::from_secs(connect_timeout),
+                TcpStream::connect((dst_addr, dst_port))
+            ).await;
+
+            let mut remote: TcpStream = match connect_result {
+                Ok(Ok(s)) => s,
+                Ok(Err(e)) => {
+                    // Connection error
                     let rep = match e.kind() {
                         std::io::ErrorKind::ConnectionRefused => 0x05,
                         std::io::ErrorKind::NotFound => 0x04,
@@ -316,6 +353,13 @@ async fn handle_replies(
                         .write_all(&[SOCKS_VERSION, rep, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
                         .await;
                     return Err(format!("[reply] connection error: {:?}", e).into());
+                }
+                Err(_) => {
+                    // Timeout
+                    let _ = socket
+                        .write_all(&[SOCKS_VERSION, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+                        .await;
+                    return Err(format!("[reply] connection timeout ({}s)", connect_timeout).into());
                 }
             };
 
@@ -344,16 +388,31 @@ async fn handle_replies(
                 }
             }
 
-            // 数据转发
-            let (c2s, s2c) = copy_bidirectional(socket, &mut remote).await?;
-            println!(
-                "[*] client->server: {} bytes, server->client: {} bytes",
-                c2s, s2c
-            );
-            println!("[reply] connection closed");
+            // 数据转发 with idle timeout
+            let (c2s, s2c, reason) = match timeout(
+                Duration::from_secs(idle_timeout),
+                copy_bidirectional(socket, &mut remote)
+            ).await {
+                Ok(Ok((c2s, s2c))) => (c2s, s2c, "closed normally".to_string()),
+                Ok(Err(e)) => {
+                    println!("[-] copy error: {:?}", e);
+                    (0, 0, format!("copy error: {}", e))
+                }
+                Err(_) => {
+                    (0, 0, "idle timeout".to_string())
+                }
+            };
+
+            if c2s > 0 || s2c > 0 {
+                println!(
+                    "[*] client->server: {} bytes, server->client: {} bytes",
+                    c2s, s2c
+                );
+            }
+            println!("[reply] connection {}", reason);
         }
         _ => {
-            return Err("Sever only supports CONNECT".into());
+            return Err("Server only supports CONNECT".into());
         }
     }
     Ok(())
@@ -374,4 +433,16 @@ struct Args {
     /// password for auth
     #[arg(short, long)]
     password: Option<String>,
+
+    /// max concurrent connections
+    #[arg(short, long, default_value = "1024")]
+    max_connections: usize,
+
+    /// connection timeout in seconds
+    #[arg(short, long, default_value = "10")]
+    connect_timeout: u64,
+
+    /// idle timeout in seconds (0 = no timeout)
+    #[arg(short, long, default_value = "300")]
+    idle_timeout: u64,
 }
