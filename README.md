@@ -16,6 +16,8 @@
 - 活动连接数监控
 - Structured logging（tracing + 文件日志轮转）
 - 每日日志轮转
+- Graceful shutdown（SIGINT/SIGTERM 平滑关闭）
+- TCP_NODELAY 减少延迟
 
 ## 编译
 
@@ -59,7 +61,9 @@ cargo install socks5d
   --max-connections 1024 \
   --connect-timeout 10 \
   --idle-timeout 300 \
-  --log-dir logs
+  --log-dir logs \
+  --shutdown-timeout 30 \
+  --metrics-port 9090
 ```
 
 ### 参数说明
@@ -73,10 +77,20 @@ cargo install socks5d
 | `--connect-timeout` | `10` | 连接目标服务器超时（秒） |
 | `--idle-timeout` | `300` | 空闲超时（秒），0=无限制 |
 | `--log-dir` | `logs` | 日志目录 |
+| `--shutdown-timeout` | `30` | 优雅关闭等待连接结束超时（秒） |
+| `--metrics-port` | `9090` | metrics HTTP 端口，0=禁用 |
 
 ### 日志
 
 日志输出到 stdout 和 `logs/socks5d.log.{日期}`，格式为 JSON。
+
+### Metrics
+
+访问 `http://localhost:9090` 查看 metrics：
+- `socks5d_active_connections` - 当前活跃连接数
+- `socks5d_total_connections` - 累计总连接数
+- `socks5d_connection_errors` - 连接错误数
+- `socks5d_bytes_transferred` - 累计传输字节数
 
 ## 认证机制
 
@@ -120,6 +134,13 @@ VER | REP | RSV | ATYP | BND.ADDR | BND.PORT
 0x05 connection refused
 0x07 command not supported
 0x08 address type not supported
+
+## 信号处理
+
+收到 SIGINT/SIGTERM 后：
+1. 停止接受新连接
+2. 等待现有连接结束（最多 `--shutdown-timeout` 秒）
+3. 强制退出
 
 ## 测试
 
