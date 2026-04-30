@@ -1,31 +1,31 @@
 [package]
 name = "socks5d"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 description = "A SOCKS5 proxy server written in Rust"
-keywords = ["socks5", "proxy", "server", "rust"]
-license = "MIT"
 repository = "https://github.com/fb0sh/socks5d"
+license = "MIT"
+keywords = ["proxy", "rust", "server", "socks5"]
 
 [dependencies]
 tokio = { version = "1", default-features = false, features = [
-    "rt-multi-thread",
-    "macros",
-    "net",
-    "io-util",
-    "sync",
-    "time",
-    "signal"
+  "io-util",
+  "macros",
+  "net",
+  "rt-multi-thread",
+  "signal",
+  "sync",
+  "time"
 ] }
 
-clap = { version="4", features=["derive", "std"] }
+clap = { version = "4", features = ["derive", "std"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 [profile.release]
-opt-level = "z"        # 最小体积
-lto = true             # 链接优化
-codegen-units = 1      # 单编译单元
-panic = "abort"        # 去 unwind runtime
-strip = true           # 去符号表（Rust 1.70+）
+opt-level = "z"  # 最小体积
+strip = true  # 去符号表（Rust 1.70+）
+lto = true  # 链接优化
+panic = "abort"  # 去 unwind runtime
+codegen-units = 1  # 单编译单元

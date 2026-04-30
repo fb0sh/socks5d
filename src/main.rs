@@ -147,12 +147,25 @@ async fn main() {
     // Spawn signal handler
     let shutdown_signal = shutdown.clone();
     tokio::spawn(async move {
-        let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt()).unwrap();
-        let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate()).unwrap();
-        tokio::select! {
-            _ = sigint.recv() => info!("received SIGINT"),
-            _ = sigterm.recv() => info!("received SIGTERM"),
+        #[cfg(unix)]
+        {
+            let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt()).unwrap();
+            let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate()).unwrap();
+            tokio::select! {
+                _ = sigint.recv() => info!("received SIGINT"),
+                _ = sigterm.recv() => info!("received SIGTERM"),
+            }
         }
+
+        #[cfg(windows)]
+        {
+            if let Err(e) = signal::ctrl_c().await {
+                warn!(error = %e, "failed to listen for Ctrl+C");
+                return;
+            }
+            info!("received Ctrl+C");
+        }
+
         info!("initiating graceful shutdown");
         shutdown_signal.store(true, Ordering::SeqCst);
     });
