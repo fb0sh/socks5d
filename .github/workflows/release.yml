@@ -11,27 +11,55 @@ permissions:
 jobs:
   build:
     strategy:
+      fail-fast: false # 某个架构失败时不取消其他架构的构建
       matrix:
         include:
-          # Linux (static musl)
+          # --- Linux (全部采用 musl 静态链接) ---
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             name: linux-x86_64
-
+            use-cross: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            name: linux-aarch64 # 常用的 Linux ARM64 服务器
+            use-cross: true
+          - os: ubuntu-latest
+            target: armv7-unknown-linux-musleabihf
+            name: linux-armv7 # 树莓派、路由器等 IoT 设备
+            use-cross: true
           - os: ubuntu-latest
             target: i686-unknown-linux-musl
             name: linux-x86
+            use-cross: true
 
-          # Windows
+          # --- Windows (MSVC 开启 crt-static 静态链接) ---
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             name: windows-x86_64
-
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            name: windows-aarch64 # Windows on ARM
           - os: windows-latest
             target: i686-pc-windows-msvc
             name: windows-x86
 
+          # --- macOS (Darwin) ---
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            name: macos-x86_64 # Intel Mac
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: macos-aarch64 # Apple Silicon (M1/M2/M3)
+
     runs-on: ${{ matrix.os }}
+
+    env:
+      # 环境变量注入：极致缩小二进制体积，无需修改 Cargo.toml
+      CARGO_PROFILE_RELEASE_LTO: true                # 开启全局链接时优化
+      CARGO_PROFILE_RELEASE_STRIP: "symbols"         # 剔除所有调试符号
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 1         # 单一代码生成单元，优化更好但编译较慢
+      CARGO_PROFILE_RELEASE_OPT_LEVEL: "z"           # 针对体积进行优化 (也可用 "s")
+      CARGO_PROFILE_RELEASE_PANIC: "abort"           # 移除 panic 展开的回溯代码 (大幅减小体积)
 
     steps:
       - name: Checkout
@@ -42,31 +70,33 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # Linux musl 静态编译依赖
-      - name: Install musl tools (Linux only)
-        if: contains(matrix.target, 'musl')
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools
+      # 快速安装 cross 工具 (仅 Linux 需要交叉编译)
+      - name: Install cross (Linux only)
+        if: matrix.use-cross
+        uses: taiki-e/install-action@cross
 
-      # Windows 32-bit 需要额外工具链支持
-      - name: Add i686 target (Windows)
-        if: contains(matrix.target, 'i686')
-        run: rustup target add ${{ matrix.target }}
-
-      - name: Build
+      # Windows & macOS 构建
+      - name: Build (Windows & macOS)
+        if: ${{ !matrix.use-cross }}
+        # Windows 开启 C 运行时静态链接
+        env:
+          RUSTFLAGS: ${{ matrix.os == 'windows-latest' && '-C target-feature=+crt-static' || '' }}
         run: cargo build --release --target ${{ matrix.target }}
+
+      # Linux 跨架构构建
+      - name: Build (Linux using cross)
+        if: matrix.use-cross
+        run: cross build --release --target ${{ matrix.target }}
 
       - name: Package
         shell: bash
         run: |
-          mkdir dist
+          mkdir -p dist
           BIN_NAME="socks5d"
-
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            cp target/${{ matrix.target }}/release/${BIN_NAME}.exe dist/${BIN_NAME}-${{ matrix.name }}.exe
+            cp "target/${{ matrix.target }}/release/${BIN_NAME}.exe" "dist/${BIN_NAME}-${{ matrix.name }}.exe"
           else
-            cp target/${{ matrix.target }}/release/${BIN_NAME} dist/${BIN_NAME}-${{ matrix.name }}
+            cp "target/${{ matrix.target }}/release/${BIN_NAME}" "dist/${BIN_NAME}-${{ matrix.name }}"
           fi
 
       - name: Upload artifact
@@ -78,14 +108,14 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
-
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
+          merge-multiple: true # 将所有架构的构建物合并到同一个 dist 文件夹下，避免嵌套目录
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/**/*
+          files: dist/*
